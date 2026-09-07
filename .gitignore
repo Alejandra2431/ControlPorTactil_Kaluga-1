@@ -1,0 +1,6 @@
+# Carpetas de compilación y temporales
+.pio/
+build/
+.DS_Store
+Thumbs.db
+.vscode/
