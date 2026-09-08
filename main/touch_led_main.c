@@ -60,6 +60,8 @@
 #define COLA_LARGO              16
 // Opcional: Duración mínima para considerar una pulsación como larga
 #define PULSACION_LARGA_MS     1000
+// Opcional: Ventana de tiempo máxima permitida entre botones
+#define VENTANA_SECRETA_MS 300
 
 static const char *TAG = "touch_led";
 
@@ -89,6 +91,11 @@ static const boton_t BOTONES[] = {
     { 11, "NETWORK",  ACC_ESTADO       },
 };
 #define BOTONES_N   (sizeof(BOTONES) / sizeof(BOTONES[0]))
+
+// Saber si un canal específico está presionado actualmente
+static bool s_canal_presionado[BOTONES_N] = {false};
+// Timestamp de la última vez que se presionó cada botón
+static int64_t s_ultimo_inicio[BOTONES_N] = {0};
 
 typedef struct {
     uint8_t r;
@@ -422,14 +429,43 @@ static void tarea_tactil(void *arg)
             if (ev.activo) {
             // on_active: guardar cuándo comenzó la pulsación.
                 s_inicio_pulsacion[idx] = ev.marca_us;
-
+                s_canal_presionado[idx] = true; //Registrar que está presionado
+                s_ultimo_inicio[idx] = ev.marca_us;
                 ESP_LOGI(TAG,
                  "T%d %s -> INICIO",
                 ev.canal,
                 BOTONES[idx].nombre);
 
+                /* Opcional: MODO SECRETO: Combinación sumultanea*/
+                int idx_record = indice_de_canal(5);
+                int idx_network = indice_de_canal(11);
+
+
+                if (idx_record >= 0 && idx_network >= 0) {
+                    // Ambos inicios deben estar dentro de la ventana de combinacion.
+                    int64_t diferencia = s_ultimo_inicio[idx_record] -
+                                         s_ultimo_inicio[idx_network];
+                    if (diferencia < 0) {
+                        diferencia = -diferencia;
+                    }
+                    /* La combinación se activa si RECORD y NETWORK comienzan
+                    dentro de una ventana máxima de 300 ms y ambos siguen presionados. */
+                    if (s_canal_presionado[idx_record] &&
+                        s_canal_presionado[idx_network] &&
+                        diferencia <= VENTANA_SECRETA_MS * 1000LL) {
+                        ESP_LOGI(TAG, "COMBINACIÓN SECRETA ACTIVADA (RECORD + NETWORK)!");
+                        estado.encendido = true;
+                        estado.color = 6;             // BLANCO
+                        estado.brillo = NIVELES_N - 1; // Máximo brillo
+                        estado.parpadeo = true;        // Activar parpadeo
+                        aplicar_al_led(led, &estado);
+                    }
+                    
+                }
+
             } else {
                 // on_inactive: calcular cuánto duró la pulsación.
+                s_canal_presionado[idx] = false; //Registrar que se soltó
                 const int64_t duracion_us =
                 ev.marca_us - s_inicio_pulsacion[idx];
 
@@ -445,7 +481,6 @@ static void tarea_tactil(void *arg)
                 pulsacion_larga ? "LARGA" : "CORTA",
                 duracion_ms);
 
-                // Por ahora, ejecutar la misma acción al soltar.
                 ejecutar_accion(&estado, BOTONES[idx].accion, eventos);
                 aplicar_al_led(led, &estado);
                 // Opcional: Detectar deslizamiento VOL_DOWN -> PLAY -> VOL_UP
